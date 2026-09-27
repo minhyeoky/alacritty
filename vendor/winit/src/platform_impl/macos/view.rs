@@ -409,9 +409,17 @@ declare_class!(
 
             // Commit only if we have marked text.
             if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
+                // Clear marked text so later `insertText` calls within the same
+                // `interpretKeyEvents` don't see stale preedit state.
+                *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
                 self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_state.set(ImeState::Committed);
+            } else if self.ivars().ime_state.get() == ImeState::Committed && !is_control {
+                // After committing composed text the Korean IME may send a second `insertText`
+                // for the triggering character (e.g. space); forward it as a regular key event
+                // instead of committing it again.
+                self.ivars().forward_key_to_app.set(true);
             }
         }
 
@@ -420,13 +428,6 @@ declare_class!(
         #[method(doCommandBySelector:)]
         fn do_command_by_selector(&self, _command: Sel) {
             trace_scope!("doCommandBySelector:");
-            // We shouldn't forward any character from just committed text, since we'll end up sending
-            // it twice with some IMEs like Korean one. We'll also always send `Enter` in that case,
-            // which is not desired given it was used to confirm IME input.
-            if self.ivars().ime_state.get() == ImeState::Committed {
-                return;
-            }
-
             self.ivars().forward_key_to_app.set(true);
 
             if unsafe { self.hasMarkedText() } && self.ivars().ime_state.get() == ImeState::Preedit
